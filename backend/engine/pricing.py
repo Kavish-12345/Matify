@@ -58,7 +58,7 @@ def _copper_category(name: str, desc: str) -> str:
         if 17000 <= u < 18000 or 82000 <= u < 83000:
             return "beryllium_copper"
         if u < 20000 or 80000 <= u < 82000:
-            return "copper"
+            return "copper_pure"
         if u < 50000 or 83000 <= u < 86000 or 87200 <= u < 87300:
             return "brass"
         if 70000 <= u < 80000 or 96000 <= u < 98000:

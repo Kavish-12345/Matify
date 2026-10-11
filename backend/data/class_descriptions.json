@@ -1,0 +1,14 @@
+{
+  "note": "Plain-language text shown to users for each application class the trained model predicts. The list of classes itself comes from the model (label_binarizer.joblib); this file only explains them. A class without an entry here is still shown, with its name only.",
+  "classes": {
+    "Structural":          {"description": "Carries load or holds things together", "examples": "frames, brackets, beams, shafts, axles"},
+    "Heat-treatable":      {"description": "Can be hardened and strengthened by heat treatment", "examples": "gears, crankshafts, high-strength bolts"},
+    "Wear-resistant":      {"description": "Rubs, slides or faces abrasion", "examples": "bushings, cams, liners, guides"},
+    "Corrosion-resistant": {"description": "Works in water, outdoors or with chemicals without rusting", "examples": "marine fittings, pump parts, food equipment"},
+    "Heat-resistant":      {"description": "Keeps its strength at high temperature", "examples": "exhaust parts, furnace parts, engine components"},
+    "Spring":              {"description": "Must flex and spring back to shape", "examples": "springs, clips, diaphragms"},
+    "Castings":            {"description": "Will be made by pouring metal into a mould", "examples": "housings, pump bodies, engine blocks"},
+    "Sheet forming":       {"description": "Will be bent, pressed or stamped from sheet", "examples": "panels, enclosures, cans, covers"},
+    "Free-machining":      {"description": "Will be machined quickly in large numbers", "examples": "screws, nuts, fittings, turned parts"}
+  }
+}

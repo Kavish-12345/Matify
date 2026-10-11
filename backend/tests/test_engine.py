@@ -5,8 +5,8 @@ import pytest
 from backend.engine.recommend import load_engine, recommend
 from backend.engine.topsis import topsis
 
-BASE = dict(function=["load_bearing"], loading="heavy_static", environment="dry_indoor",
-            manufacturing="machining", weight_priority="important", cost_priority="important")
+BASE = dict(properties=["Structural"], environment="dry_indoor",
+            weight_priority="important", cost_priority="important")
 
 
 def test_topsis_simple():
@@ -59,3 +59,17 @@ def test_table_not_changed_by_override():
 def test_bad_option_rejected():
     with pytest.raises(ValueError):
         recommend({**BASE, "environment": "on_mars"})
+
+
+def test_properties_come_from_model():
+    from backend.engine.options import options_payload
+    eng = load_engine()
+    opts = options_payload(eng["prices"]["categories"], eng["classes"])
+    assert [o["value"] for o in opts["fields"]["properties"]] == eng["classes"]
+
+
+def test_primary_property_weighting_and_not_sure():
+    a = recommend({**BASE, "properties": ["Wear-resistant", "Corrosion-resistant"], "primary_property": "Wear-resistant"})
+    assert a["targets"] == {"Wear-resistant": 3, "Corrosion-resistant": 2}
+    b = recommend({**BASE, "properties": ["not_sure"]})
+    assert b["targets"] == {} and len(b["results"]) == 10   # best fit over all classes

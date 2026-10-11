@@ -1,49 +1,33 @@
 """
-Fixed requirement form: allowed options and the answer -> class / weight mapping.
+Fixed requirement form: allowed options and how answers become ML targets and TOPSIS weights.
 
-The chat (LLM) and the No-AI form both fill exactly these fields. Every field
-accepts "not_sure". The code, not the LLM, turns answers into ML target classes
-and TOPSIS weights.
+The "properties" question is NOT hand-made: its options are the application classes
+the trained model predicts (from label_binarizer.joblib), with plain-language text
+from backend/data/class_descriptions.json. The user confirms which classes the part
+needs and which one matters most, so no answer-to-class mapping table is needed.
+
+Other questions feed TOPSIS weights only (they do not touch the ML model).
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+DESCRIPTIONS_PATH = Path(__file__).resolve().parents[1] / "data" / "class_descriptions.json"
+
 PRIORITY_WEIGHT = {"critical": 3, "important": 2, "not_important": 0, "not_sure": 1}
+PRIMARY_IMPORTANCE, OTHER_IMPORTANCE = 3, 2   # most important class vs the other chosen classes
 
 FAMILIES = ["ferrous", "aluminium", "copper", "magnesium"]
 
-# field -> option -> {label, classes: {class: importance}, ...}
 FIELDS = {
-    "function": {  # multi-select
-        "load_bearing":     {"label": "Carries load (frame, bracket, beam)", "classes": {"Structural": 3}},
-        "rotating_or_gear": {"label": "Rotating part / shaft / gear",        "classes": {"Heat-treatable": 3, "Structural": 2}},
-        "rubs_or_slides":   {"label": "Rubs or slides against another part", "classes": {"Wear-resistant": 3}},
-        "springs_back":     {"label": "Must flex and spring back",           "classes": {"Spring": 3}},
-        "fluid_contact":    {"label": "In contact with water or fluids",     "classes": {"Corrosion-resistant": 2}},
-        "housing_or_cover": {"label": "Housing, casing or cover",            "classes": {"Structural": 2}},
-        "not_sure":         {"label": "Not sure",                            "classes": {}},
-    },
-    "loading": {  # secondary signal: function decides the main classes
-        "light_static": {"label": "Light, steady load",           "classes": {"Structural": 1}},
-        "heavy_static": {"label": "Heavy, steady load",           "classes": {"Structural": 2, "Heat-treatable": 1}},
-        "cyclic":       {"label": "Repeated / fluctuating load (fatigue)", "classes": {"Heat-treatable": 1, "Structural": 1}},
-        "impact":       {"label": "Shock or impact",              "classes": {"Structural": 2, "Heat-treatable": 1}},
-        "not_sure":     {"label": "Not sure",                     "classes": {}},
-    },
-    "environment": {
-        "dry_indoor":       {"label": "Dry, indoors",             "classes": {},                          "corrosion_weight": 0},
-        "outdoor_humid":    {"label": "Outdoors / humid",         "classes": {"Corrosion-resistant": 2},  "corrosion_weight": 2},
-        "water_marine":     {"label": "Water or sea water",       "classes": {"Corrosion-resistant": 3},  "corrosion_weight": 3},
-        "chemical":         {"label": "Chemicals / acids",        "classes": {"Corrosion-resistant": 3},  "corrosion_weight": 3},
-        "high_temperature": {"label": "High temperature (> 300 °C)", "classes": {"Heat-resistant": 3},    "corrosion_weight": 1},
-        "not_sure":         {"label": "Not sure",                 "classes": {},                          "corrosion_weight": 1},
-    },
-    "manufacturing": {
-        "machining":      {"label": "Machined from bar/plate",    "classes": {}},
-        "casting":        {"label": "Cast in a mould",            "classes": {"Castings": 3}},
-        "sheet_forming":  {"label": "Bent / stamped from sheet",  "classes": {"Sheet forming": 3}},
-        "forging":        {"label": "Forged",                     "classes": {"Heat-treatable": 2}},
-        "bulk_machining": {"label": "Machined in large numbers (screws, fittings)", "classes": {"Free-machining": 3}},
-        "not_sure":       {"label": "Not sure",                   "classes": {}},
+    "environment": {   # sets the corrosion criterion weight in TOPSIS
+        "dry_indoor":       {"label": "Dry, indoors",                "corrosion_weight": 0},
+        "outdoor_humid":    {"label": "Outdoors / humid",            "corrosion_weight": 2},
+        "water_marine":     {"label": "Water or sea water",          "corrosion_weight": 3},
+        "chemical":         {"label": "Chemicals / acids",           "corrosion_weight": 3},
+        "high_temperature": {"label": "High temperature",            "corrosion_weight": 1},
+        "not_sure":         {"label": "Not sure",                    "corrosion_weight": 1},
     },
     "weight_priority": {k: {"label": k.replace("_", " ").capitalize()} for k in PRIORITY_WEIGHT},
     "cost_priority":   {k: {"label": k.replace("_", " ").capitalize()} for k in PRIORITY_WEIGHT},
@@ -57,22 +41,26 @@ MIN_LIMIT_FIELDS = {
     "Ro_max": "Max density (kg/m³)",
 }
 
-DEFAULT_CLASSES = {"Structural": 2}  # used when the answers give no class at all
+
+def load_descriptions() -> dict:
+    try:
+        return json.loads(DESCRIPTIONS_PATH.read_text(encoding="utf-8"))["classes"]
+    except (OSError, ValueError, KeyError):
+        return {}
+
+
+def property_options(classes: list[str]) -> list[dict]:
+    """One option per class the model predicts, in the model's order."""
+    desc = load_descriptions()
+    return [{"value": c, "label": c, "description": desc.get(c, {}).get("description", ""),
+             "examples": desc.get(c, {}).get("examples", "")} for c in classes]
 
 
 def target_classes(form: dict) -> dict[str, int]:
-    """Combine all answers into {class: importance 1-3}, keeping the highest importance."""
-    out: dict[str, int] = {}
-
-    def add(classes):
-        for c, w in classes.items():
-            out[c] = max(out.get(c, 0), w)
-
-    for f in form.get("function") or ["not_sure"]:
-        add(FIELDS["function"][f]["classes"])
-    for field in ("loading", "environment", "manufacturing"):
-        add(FIELDS[field][form.get(field, "not_sure")]["classes"])
-    return out or dict(DEFAULT_CLASSES)
+    """{class: importance}. Empty dict = user not sure -> engine uses best fit over all classes."""
+    props = [p for p in (form.get("properties") or []) if p != "not_sure"]
+    primary = form.get("primary_property")
+    return {p: (PRIMARY_IMPORTANCE if (p == primary or len(props) == 1) else OTHER_IMPORTANCE) for p in props}
 
 
 def topsis_weights(form: dict) -> dict[str, float]:
@@ -84,11 +72,13 @@ def topsis_weights(form: dict) -> dict[str, float]:
     return {"suitability": suit, "cost": cost, "density": weight, "corrosion": corr}
 
 
-def options_payload(price_categories: dict) -> dict:
-    """What GET /api/options returns (used by the React form and the chat validator)."""
+def options_payload(price_categories: dict, classes: list[str]) -> dict:
+    """What GET /api/options returns (used by the React form and the chat)."""
+    fields = {f: [{"value": k, "label": v["label"]} for k, v in opts.items()] for f, opts in FIELDS.items()}
+    fields["properties"] = property_options(classes)
     return {
-        "fields": {f: [{"value": k, "label": v["label"]} for k, v in opts.items()] for f, opts in FIELDS.items()},
-        "multi_select": ["function"],
+        "fields": fields,
+        "multi_select": ["properties"],
         "min_limits": MIN_LIMIT_FIELDS,
         "families": FAMILIES,
         "material_groups": {k: v["label"] for k, v in price_categories.items()},

@@ -17,7 +17,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from .options import FAMILIES, FIELDS, MIN_LIMIT_FIELDS, PRIORITY_WEIGHT, target_classes, topsis_weights
+from .options import FAMILIES, FIELDS, MIN_LIMIT_FIELDS, target_classes, topsis_weights
 from .preprocess import build_X, clean
 from .pricing import cost_value, effective_prices, load_prices, price_category
 from .topsis import topsis
@@ -71,17 +71,22 @@ def load_engine():
 # --------------------------------------------------------------------------
 # Validation
 # --------------------------------------------------------------------------
-def validate_form(form: dict, prices: dict) -> dict:
+def validate_form(form: dict, prices: dict, classes: list[str]) -> dict:
     """Return a cleaned copy; raise ValueError with a clear message on bad input."""
     f = dict(form)
-    funcs = f.get("function") or ["not_sure"]
-    if isinstance(funcs, str):
-        funcs = [funcs]
-    for v in funcs:
-        if v not in FIELDS["function"]:
-            raise ValueError(f"function: unknown option '{v}'")
-    f["function"] = funcs
-    for field in ("loading", "environment", "manufacturing", "weight_priority", "cost_priority"):
+    props = f.get("properties") or ["not_sure"]
+    if isinstance(props, str):
+        props = [props]
+    for v in props:
+        if v != "not_sure" and v not in classes:
+            raise ValueError(f"properties: unknown class '{v}'. Model classes: {classes}")
+    props = [v for v in props if v != "not_sure"] or ["not_sure"]
+    f["properties"] = props
+    primary = f.get("primary_property")
+    if primary in (None, "", "not_sure") or primary not in props:
+        primary = props[0] if len(props) == 1 and props[0] != "not_sure" else None
+    f["primary_property"] = primary
+    for field in ("environment", "weight_priority", "cost_priority"):
         v = f.get(field) or "not_sure"
         if v not in FIELDS[field]:
             raise ValueError(f"{field}: unknown option '{v}'")
@@ -114,34 +119,61 @@ def validate_form(form: dict, prices: dict) -> dict:
 def recommend(form: dict) -> dict:
     eng = load_engine()
     df, prices = eng["df"], eng["prices"]
-    form = validate_form(form, prices)
+    form = validate_form(form, prices, eng["classes"])
 
     targets = target_classes(form)
     raw_w = topsis_weights(form)
 
-    # 1. Filter: hard limits and include / avoid
+    # 1. Filter: hard limits and include / avoid (track which step empties the list)
+    w_raw = np.array([raw_w["suitability"], raw_w["cost"], raw_w["density"], raw_w["corrosion"]], dtype=float)
+    empty = {"form": form, "targets": targets, "weights": raw_w, "results": [], "n_candidates": 0,
+             "n_alloys_ranked": 0, "cost_basis": "", "note": "",
+             "weights_normalised": dict(zip(["suitability", "cost", "density", "corrosion"],
+                                            (w_raw / w_raw.sum()).round(3).tolist()))}
+    clash = sorted(set(form["include"]) & set(form["avoid"]))
+    if clash:
+        return {**empty, "problem_fields": ["include", "avoid"],
+                "message": f"{', '.join(clash)} is in both 'include' and 'avoid', so no material is left. "
+                           "Remove it from one of the two lists."}
     cand = df
     lim = form["min_limits"]
+    names = {"Su": "tensile strength", "Sy": "yield strength", "A5": "elongation", "E": "Young's modulus"}
+    units = {"Su": "MPa", "Sy": "MPa", "A5": "%", "E": "MPa"}
     for col in ("Su", "Sy", "A5", "E"):
         if col in lim:
+            before = cand
             cand = cand[cand[col] >= lim[col]]
+            if cand.empty:
+                return {**empty, "problem_fields": ["min_limits"], "message": f"No material has {names[col]} >= {lim[col]:g} {units[col]} "
+                                            f"(highest among the remaining candidates: {before[col].max():g} {units[col]}). "
+                                            "Lower this limit."}
     if "Ro_max" in lim:
+        before = cand
         cand = cand[cand["Ro"] <= lim["Ro_max"]]
+        if cand.empty:
+            return {**empty, "problem_fields": ["min_limits"], "message": f"No material has density <= {lim['Ro_max']:g} kg/m3 (lightest remaining: "
+                                        f"{before['Ro'].min():g} kg/m3). Density is in kg/m3, e.g. 3 g/cm3 = 3000 kg/m3."}
     in_group = lambda vals: cand["family"].isin(vals) | cand["price_category"].isin(vals)
     if form["include"]:
         cand = cand[in_group(form["include"])]
+        if cand.empty:
+            return {**empty, "problem_fields": ["include", "min_limits"], "message": "No material in the 'include' list meets the other limits. "
+                                        "Add more groups or relax a limit."}
     if form["avoid"]:
         cand = cand[~in_group(form["avoid"])]
+        if cand.empty:
+            return {**empty, "problem_fields": ["avoid"], "message": "The 'avoid' list removes every remaining material. Avoid fewer groups."}
     n_after_filter = len(cand)
-    if cand.empty:
-        return {"form": form, "targets": targets, "weights": raw_w, "results": [],
-                "n_candidates": 0, "message": "No material meets the limits. Relax a limit or the include/avoid list."}
     cand = cand.copy()
 
-    # 2. ML suitability = importance-weighted mean probability of the target classes
-    tw = np.array(list(targets.values()), dtype=float)
-    P = cand[[f"p::{c}" for c in targets]].to_numpy()
-    cand["suitability"] = (P * tw).sum(axis=1) / tw.sum()
+    # 2. ML suitability = importance-weighted mean probability of the chosen classes.
+    #    If the user is not sure, use the best fit over all classes the model predicts.
+    if targets:
+        tw = np.array(list(targets.values()), dtype=float)
+        P = cand[[f"p::{c}" for c in targets]].to_numpy()
+        cand["suitability"] = (P * tw).sum(axis=1) / tw.sum()
+    else:
+        cand["suitability"] = cand[[f"p::{c}" for c in eng["classes"]]].max(axis=1)
 
     # 3. Price layer: cited range per group; ranking uses the midpoint
     eff = effective_prices(prices, form["price_overrides"])
