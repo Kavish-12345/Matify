@@ -1,0 +1,71 @@
+{
+  "model": "Gradient Boosting",
+  "params": {
+    "estimator__max_depth": null,
+    "estimator__learning_rate": 0.05
+  },
+  "features": [
+    "Su",
+    "Sy",
+    "A5",
+    "E",
+    "mu",
+    "Ro",
+    "Sy_Su",
+    "ht_quenched_tempered",
+    "ht_normalized",
+    "ht_annealed",
+    "ht_solution_aged",
+    "ht_cold_worked",
+    "ht_hot_worked",
+    "ht_as_cast",
+    "ht_other"
+  ],
+  "use_family": false,
+  "use_heat_treatment": true,
+  "classes": [
+    "Castings",
+    "Corrosion-resistant",
+    "Free-machining",
+    "Heat-resistant",
+    "Heat-treatable",
+    "Sheet forming",
+    "Spring",
+    "Structural",
+    "Wear-resistant"
+  ],
+  "threshold": 0.5,
+  "a5_medians": {
+    "aluminium": 11.0,
+    "copper": 30.0,
+    "ferrous": 16.0,
+    "magnesium": 8.0,
+    "_global": 16.0
+  },
+  "cv": {
+    "method": "GroupKFold(5), groups = alloy name without temper",
+    "scores": {
+      "All": {
+        "micro_F1": 0.818,
+        "macro_F1": 0.73,
+        "exact_match": 0.71,
+        "hamming_loss": 0.05
+      },
+      "Ferrous": {
+        "micro_F1": 0.827,
+        "macro_F1": 0.796,
+        "exact_match": 0.769,
+        "hamming_loss": 0.038
+      },
+      "Non-ferrous": {
+        "micro_F1": 0.806,
+        "macro_F1": 0.572,
+        "exact_match": 0.584,
+        "hamming_loss": 0.074
+      }
+    }
+  },
+  "n_train": 1401,
+  "trained_on": "2026-10-11",
+  "sklearn_version": "1.9.1"
+}
