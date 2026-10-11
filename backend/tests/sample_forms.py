@@ -58,9 +58,9 @@ def main():
         status = "PASS " if groups & expected else "CHECK"
         print(f"\n[{status}] {title}   targets={res['targets']}   weights={res['weights_normalised']}")
         for r in top:
-            cost = f"Rs {r['cost_per_part_rs']}/part" if r["cost_per_part_rs"] is not None else f"Rs {r['price']['rs_per_kg']:.0f}/kg"
-            print(f"  {r['rank']}. {r['display_name'][:45]:45s} {r['material_group']:24s} "
-                  f"suit {r['suitability_pct']:5.1f}%  topsis {r['topsis_score']:.3f}  {cost}")
+            print(f"  {r['rank']}. {r['display_name'][:42]:42s} {r['material_group']:22s} "
+                  f"suit {r['suitability_pct']:5.1f}%  topsis {r['topsis_score']:.3f}  "
+                  f"{r['cost']['text']:28s} {r['cost']['vs_top']}")
 
 
 if __name__ == "__main__":

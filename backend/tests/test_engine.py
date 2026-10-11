@@ -42,11 +42,18 @@ def test_limits_and_avoid():
         assert x["properties"]["Sy"] >= 600 and x["family"] != "ferrous"
 
 
-def test_price_override_changes_cost():
+def test_price_range_and_override():
     a = recommend({**BASE, "volume_cm3": 100, "include": ["carbon_steel"], "top_n": 1})["results"][0]
+    assert a["cost"]["low"] < a["cost"]["high"] and not a["price"]["custom"]
     b = recommend({**BASE, "volume_cm3": 100, "include": ["carbon_steel"], "top_n": 1,
-                   "price_overrides": {"carbon_steel": 124}})["results"][0]
-    assert b["price"]["custom"] and b["cost_per_part_rs"] == pytest.approx(2 * a["cost_per_part_rs"], rel=1e-6)
+                   "price_overrides": {"carbon_steel": 100}})["results"][0]
+    assert b["price"]["custom"] and b["cost"]["low"] == b["cost"]["high"]
+    assert b["cost"]["low"] == pytest.approx(100 * b["properties"]["Ro"] * 100e-6, rel=1e-3)
+
+
+def test_table_not_changed_by_override():
+    recommend({**BASE, "price_overrides": {"carbon_steel": 999}})
+    assert load_engine()["prices"]["categories"]["carbon_steel"]["low"] == 52
 
 
 def test_bad_option_rejected():

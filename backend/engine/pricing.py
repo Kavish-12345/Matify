@@ -45,7 +45,7 @@ def _stainless_kind(name: str) -> str:
     n = name.lower().replace(" ", "")
     if re.search(r"316|317|nimo|17346|17347|17348|17349", n):
         return "stainless_mo"
-    if re.search(r"(sus|aisi|sae|^)4[0-4]\d|x\d+cr\d+(?!ni)$|x\d+cr1[37]$|1702\d|1704\d", n) and "ni" not in n:
+    if re.search(r"(sus|aisi|sae|bs|^)4[0-4]\d|x\d+cr\d+(?!ni)$|x\d+cr1[37]$|1702\d|1704\d", n) and "ni" not in n:
         return "stainless_ferritic"
     return "stainless_austenitic"
 
@@ -113,26 +113,42 @@ def price_category(row: pd.Series) -> str:
 # Price lookup and cost
 # --------------------------------------------------------------------------
 def effective_prices(prices: dict, overrides: dict | None = None) -> dict[str, dict]:
-    """Category -> {price, source, date, overridden}."""
+    """
+    Category -> {low, high, typical, available, custom, source, ...}.
+    typical = midpoint of the cited range (used for ranking only).
+    A user price replaces the range with one exact value for this request only.
+    """
     out = {}
     for key, c in prices["categories"].items():
+        low, high = c.get("low"), c.get("high")
+        available = low is not None and high is not None
         out[key] = {
-            "price": float(c["price"]),
+            "low": float(low) if available else None,
+            "high": float(high) if available else None,
+            "typical": (float(low) + float(high)) / 2 if available else None,
+            "available": available,
+            "custom": False,
+            "label": c["label"],
+            "basis": c["basis"],
             "source": c["source"],
             "url": c.get("url", ""),
-            "basis": c["basis"],
+            "why": c.get("why", ""),
             "date": prices["retrieved_on"],
-            "overridden": False,
         }
     for key, value in (overrides or {}).items():
         if key in out and value is not None and float(value) > 0:
-            out[key].update(price=float(value), source="Custom price entered by user",
-                            url="", basis="custom", overridden=True)
+            v = float(value)
+            out[key].update(low=v, high=v, typical=v, available=True, custom=True, basis="custom",
+                            source="Your price (entered by you)", url="")
     return out
 
 
-def cost_per_part(price_rs_kg: float, density_kg_m3: float, volume_cm3: float | None) -> float | None:
-    """Rs per part = price (Rs/kg) x density (kg/m3) x volume (m3). Material cost only."""
-    if not volume_cm3:
+def cost_value(price_rs_kg, density_kg_m3: float, volume_cm3: float | None):
+    """
+    Rs per part = price (Rs/kg) x density (kg/m3) x volume (cm3) x 1e-6.
+    Without a volume, returns Rs per cm3 (same formula with volume = 1 cm3),
+    which compares materials fairly because it accounts for density.
+    """
+    if price_rs_kg is None:
         return None
-    return price_rs_kg * density_kg_m3 * volume_cm3 * 1e-6
+    return price_rs_kg * density_kg_m3 * (volume_cm3 or 1.0) * 1e-6

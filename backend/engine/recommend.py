@@ -19,7 +19,7 @@ import pandas as pd
 
 from .options import FAMILIES, FIELDS, MIN_LIMIT_FIELDS, PRIORITY_WEIGHT, target_classes, topsis_weights
 from .preprocess import build_X, clean
-from .pricing import cost_per_part, effective_prices, load_prices, price_category
+from .pricing import cost_value, effective_prices, load_prices, price_category
 from .topsis import topsis
 
 BACKEND = Path(__file__).resolve().parents[1]
@@ -143,32 +143,39 @@ def recommend(form: dict) -> dict:
     P = cand[[f"p::{c}" for c in targets]].to_numpy()
     cand["suitability"] = (P * tw).sum(axis=1) / tw.sum()
 
-    # 3. Price layer
+    # 3. Price layer: cited range per group; ranking uses the midpoint
     eff = effective_prices(prices, form["price_overrides"])
-    cand["price_rs_kg"] = cand["price_category"].map(lambda k: eff[k]["price"])
     vol = form["volume_cm3"]
-    cand["cost_per_part"] = [cost_per_part(p, r, vol) for p, r in zip(cand["price_rs_kg"], cand["Ro"])]
-    cost_col = "cost_per_part" if vol else "price_rs_kg"
+    g = cand["price_category"]
+    for k in ("low", "typical", "high"):
+        cand[f"cost_{k}"] = [cost_value(eff[c][k], r, vol) for c, r in zip(g, cand["Ro"])]
+    cand["price_available"] = g.map(lambda c: eff[c]["available"])
 
     # 4. One row per alloy: keep its most suitable heat-treatment condition
-    cand = (cand.sort_values(["suitability", cost_col], ascending=[False, True])
+    cand = (cand.sort_values(["suitability", "cost_typical"], ascending=[False, True], na_position="last")
                 .drop_duplicates("group", keep="first"))
 
+    # Materials with no price: ranked as the most expensive candidate (conservative) and flagged
+    known = cand["cost_typical"].dropna()
+    fill = float(known.max()) if len(known) else 1.0
+    cand["cost_rank_value"] = cand["cost_typical"].fillna(fill)
+
     # 5. TOPSIS over distinct alloys
-    crit = ["suitability", cost_col, "Ro", "corrosion_score"]
+    crit = ["suitability", "cost_rank_value", "Ro", "corrosion_score"]
     w = np.array([raw_w["suitability"], raw_w["cost"], raw_w["density"], raw_w["corrosion"]], dtype=float)
     benefit = np.array([True, False, False, True])
     cand["topsis"] = topsis(cand[crit].to_numpy(dtype=float), w, benefit)
     cand = cand.sort_values(["topsis", "suitability"], ascending=False)
 
     top = cand.head(form["top_n"])
-    results = [_explain(row, rank, targets, eff, vol) for rank, (_, row) in enumerate(top.iterrows(), start=1)]
+    ref = top.iloc[0]["cost_typical"]  # #1's typical cost, for the comparison label
+    results = [_explain(row, rank, targets, eff, vol, ref) for rank, (_, row) in enumerate(top.iterrows(), start=1)]
     return {
         "form": form,
         "targets": targets,
         "weights": raw_w,
         "weights_normalised": dict(zip(["suitability", "cost", "density", "corrosion"], (w / w.sum()).round(3).tolist())),
-        "cost_basis": "per part (Rs)" if vol else "per kg (Rs/kg)",
+        "cost_basis": "Rs per part" if vol else "Rs per cm3 of material (enter a part volume for Rs per part)",
         "n_candidates": int(n_after_filter),
         "n_alloys_ranked": int(len(cand)),
         "results": results,
@@ -176,15 +183,33 @@ def recommend(form: dict) -> dict:
     }
 
 
-def _explain(row, rank, targets, eff, vol) -> dict:
+def _compare(cost, ref, rank):
+    if rank == 1:
+        return "Top-ranked material (reference)"
+    if cost is None or ref is None or pd.isna(cost) or pd.isna(ref) or ref == 0:
+        return "Cannot compare (price not available)"
+    r = cost / ref
+    if 0.9 <= r <= 1.1:
+        return "Similar cost to #1"
+    return f"About {r:.1f}x the cost of #1" if r > 1 else f"About {r:.1f}x the cost of #1 (cheaper)"
+
+
+def _explain(row, rank, targets, eff, vol, ref) -> dict:
     cat = row["price_category"]
     price = eff[cat]
     class_probs = {c: round(float(row[f"p::{c}"]) * 100, 1) for c in targets}
-    reasons = []
-    for c, p in sorted(class_probs.items(), key=lambda x: -x[1]):
-        reasons.append(f"{c}: model suitability {p:.0f}%")
-    reasons.append(f"Price {price['price']:.0f} Rs/kg ({'custom' if price['overridden'] else price['basis']})")
-    reasons.append(f"Density {row['Ro']:.0f} kg/m³, corrosion score {int(row['corrosion_score'])}/5")
+    unit = "per part" if vol else "per cm3"
+    if price["available"]:
+        lo, hi = float(row["cost_low"]), float(row["cost_high"])
+        dec = 2 if hi < 10 else 0
+        cost_text = (f"Rs {lo:.{dec}f} {unit} (your price)" if price["custom"]
+                     else f"Rs {lo:.{dec}f} - {hi:.{dec}f} {unit}")
+        price_text = (f"Rs {price['low']:.0f}/kg (your price)" if price["custom"]
+                      else f"Rs {price['low']:.0f} - {price['high']:.0f}/kg")
+    else:
+        cost_text = price_text = "Price not available - enter your price"
+    why = [f"{c}: model suitability {p:.0f}%" for c, p in sorted(class_probs.items(), key=lambda x: -x[1])]
+    why.append(f"Density {row['Ro']:.0f} kg/m³, corrosion score {int(row['corrosion_score'])}/5")
     return {
         "rank": rank,
         "material": row["Material"],
@@ -193,21 +218,32 @@ def _explain(row, rank, targets, eff, vol) -> dict:
         "standard": row["Std"],
         "family": row["family"],
         "material_group": cat,
+        "material_group_label": price["label"],
         "suitability_pct": round(float(row["suitability"]) * 100, 1),
         "class_suitability_pct": class_probs,
         "topsis_score": round(float(row["topsis"]), 4),
         "properties": {k: (None if pd.isna(row[k]) else round(float(row[k]), 3)) for k in ("Su", "Sy", "A5", "E", "G", "mu", "Ro")},
         "a5_imputed": bool(row["A5_imputed"]),
         "price": {
-            "rs_per_kg": price["price"],
+            "available": price["available"],
+            "custom": price["custom"],
+            "rs_per_kg_low": price["low"],
+            "rs_per_kg_high": price["high"],
+            "text": price_text,
+            "basis": price["basis"],
             "source": price["source"],
             "url": price["url"],
-            "basis": price["basis"],
             "date": price["date"],
-            "custom": price["overridden"],
+            "why": price["why"],
         },
-        "cost_per_part_rs": None if not vol else round(float(row["cost_per_part"]), 2),
+        "cost": {
+            "unit": unit,
+            "low": None if pd.isna(row["cost_low"]) else round(float(row["cost_low"]), 2),
+            "high": None if pd.isna(row["cost_high"]) else round(float(row["cost_high"]), 2),
+            "text": cost_text,
+            "vs_top": _compare(row["cost_typical"], ref, rank),
+        },
         "corrosion_score": int(row["corrosion_score"]),
         "labelled_classes": row["app_classes"] if row["status"] == "train" else "(no label; scored by model)",
-        "why": reasons,
+        "why": why,
     }
