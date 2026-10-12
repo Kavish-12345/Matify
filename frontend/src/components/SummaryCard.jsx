@@ -8,9 +8,16 @@ export default function SummaryCard({ variant = "panel", options, form, complete
 
   return (
     <div className={`summary ${variant}`}>
+      {variant === "inline" && (
+        <div className="tb-head">
+          <span>REQUIREMENT SPECIFICATION</span>
+          <span>DWG MAT-{String(Math.abs([...(form.part_name || "part")].reduce((a, c) => (a * 31 + c.charCodeAt(0)) | 0, 7)) % 10000).padStart(4, "0")}</span>
+          <span>{new Date().toLocaleDateString()}</span>
+        </div>
+      )}
       {variant !== "list" && (
         <div className="summary-head">
-          <h2>{variant === "inline" ? "Here's what I've noted" : "Requirement summary"}</h2>
+          <h2>{variant === "inline" ? `Part: ${form.part_name || "—"}` : "Requirement summary"}</h2>
           <span className="muted small">
             {done}/{FIELD_ORDER.length}
           </span>

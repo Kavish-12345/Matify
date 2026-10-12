@@ -83,6 +83,24 @@ def get_prices():
     return load_engine()["prices"]
 
 
+@app.get("/api/materials/summary")
+def materials_summary():
+    """Read-only overview of the dataset for the homepage (stats + Ashby chart) and percentile bars."""
+    eng = load_engine()
+    df, meta = eng["df"], eng["meta"]
+    cols = ["Material", "Heat treatment", "family", "Su", "Sy", "A5", "E", "Ro", "price_category"]
+    rows = df[cols].astype(object).where(df[cols].notna(), None).to_dict(orient="records")
+    return {
+        "count": int(len(df)),
+        "standards": sorted(df["Std"].dropna().unique().tolist()),
+        "families": sorted(df["family"].unique().tolist()),
+        "classes": eng["classes"],
+        "model": {"name": meta.get("model"), "features": len(meta.get("features", [])),
+                  "scores": meta.get("cv", {}).get("scores", {}), "n_train": meta.get("n_train")},
+        "materials": rows,
+    }
+
+
 @app.post("/api/recommend")
 def post_recommend(req: RecommendRequest):
     try:

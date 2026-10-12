@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { FIELD_ORDER, emptyForm, getOptions, getRecommendation, missingFields, toPayload } from "./api.js";
+import { FIELD_ORDER, emptyForm, getMaterialsSummary, getOptions, getRecommendation, missingFields, toPayload } from "./api.js";
 import { addToHistory, clearHistory, clearSession, loadHistory, loadSession, removeFromHistory, saveSession } from "./storage.js";
 import ChatWindow from "./components/ChatWindow.jsx";
 import NoAIForm from "./components/NoAIForm.jsx";
 import SummaryCard from "./components/SummaryCard.jsx";
 import Results from "./components/Results.jsx";
+import { GearLoader, Logo } from "./components/mech.jsx";
 
 const saved = loadSession() || {};
 
@@ -16,7 +17,7 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString();
 }
 
-export default function App() {
+export default function App({ start, onStartConsumed, onHome }) {
   const [options, setOptions] = useState(null);
   const [mode, setMode] = useState(saved.mode || "chat");
   const [form, setForm] = useState(saved.form || emptyForm());
@@ -28,11 +29,24 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [menu, setMenu] = useState(null); // "req" | "history" | null
+  const [pendingPrompt, setPendingPrompt] = useState(null);
+  const [summary, setSummary] = useState(null);
   const menuRef = useRef(null);
 
   useEffect(() => {
     getOptions().then(setOptions).catch((e) => setError("Backend not reachable: " + e.message));
+    getMaterialsSummary().then(setSummary).catch(() => {});
   }, []);
+
+  // arriving from the homepage: start fresh in the chosen mode (optionally with an example prompt)
+  useEffect(() => {
+    if (!start) return;
+    newSearch();
+    setMode(start.mode || "chat");
+    if (start.prompt) setPendingPrompt(start.prompt);
+    onStartConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [start]);
 
   // keep the current session in browser storage (survives refresh)
   useEffect(() => {
@@ -132,11 +146,11 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand" onClick={newSearch} title="New search">
-          <span className="logo">M</span>
+        <div className="brand" onClick={onHome} title="Home">
+          <Logo size={32} />
           <div>
-            <h1>Matify</h1>
-            <p>AI-based material selection</p>
+            <h1 className="wordmark">MATIFY</h1>
+            <p>Material selection engine</p>
           </div>
         </div>
 
@@ -194,6 +208,7 @@ export default function App() {
               )}
             </div>
 
+            <button className="pill" onClick={newSearch} title="Start a new search">+ New</button>
             {!result && (
               <div className="mode-toggle" role="tablist">
                 <button className={mode === "chat" ? "active" : ""} onClick={() => setMode("chat")}>
@@ -210,6 +225,12 @@ export default function App() {
 
       {error && <div className="error">{error}</div>}
 
+      {busy && (
+        <div className="overlay">
+          <GearLoader label={result ? "Re-ranking with your price" : "Ranking materials"} />
+        </div>
+      )}
+
       {!options && !error && <div className="muted center">Loading…</div>}
 
       {options && !result && mode === "chat" && (
@@ -221,6 +242,8 @@ export default function App() {
           setForm={setForm}
           question={question}
           setQuestion={setQuestion}
+          pendingPrompt={pendingPrompt}
+          onPromptConsumed={() => setPendingPrompt(null)}
           busy={busy}
           onConfirm={() => runRecommend()}
           onEdit={() => setMode("form")}
@@ -250,6 +273,7 @@ export default function App() {
       {result && (
         <main className="main page-scroll">
           <Results
+            summary={summary}
             result={result}
             options={options}
             form={form}

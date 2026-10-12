@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import { FIELD_LABELS, missingFields, streamChat } from "../api.js";
 import QuestionCard from "./QuestionCard.jsx";
 import SummaryCard from "./SummaryCard.jsx";
+import { CarLoader, Logo } from "./mech.jsx";
 
 const EXAMPLES = [
   "A bushing that slides on a steel shaft, used outdoors",
@@ -11,13 +12,24 @@ const EXAMPLES = [
   "A pump housing that sits in sea water",
 ];
 
-export default function ChatWindow({ options, messages, setMessages, form, setForm, question, setQuestion, busy, onConfirm, onEdit }) {
+export default function ChatWindow({ options, messages, setMessages, form, setForm, question, setQuestion, pendingPrompt, onPromptConsumed, busy, onConfirm, onEdit }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [cardOpen, setCardOpen] = useState(!!question && question.type !== "text");
   const complete = missingFields(form).length === 0;
   const threadRef = useRef(null);
+  const consumedRef = useRef(null);
   const inputRef = useRef(null);
+
+  // example prompt from the homepage: send it once
+  useEffect(() => {
+    if (pendingPrompt && consumedRef.current !== pendingPrompt && !sending && messages.length === 0) {
+      consumedRef.current = pendingPrompt;
+      onPromptConsumed?.();
+      send(pendingPrompt);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPrompt, messages.length]);
 
   // a new question (from the chat or from a failed search) opens the card
   useEffect(() => {
@@ -121,7 +133,7 @@ export default function ChatWindow({ options, messages, setMessages, form, setFo
         <div className="thread-inner">
           {!started && (
             <div className="welcome">
-              <div className="welcome-logo">M</div>
+              <div className="welcome-logo"><Logo size={56} /></div>
               <h2>What part are you designing?</h2>
               <p className="muted">
                 Describe it in your own words. I'll ask a few quick questions, then the ML engine ranks materials for you.
@@ -143,7 +155,7 @@ export default function ChatWindow({ options, messages, setMessages, form, setFo
               </div>
             ) : (
               <div key={i} className="msg assistant">
-                <div className="avatar">M</div>
+                <div className="avatar"><Logo size={22} /></div>
                 <div className="msg-body">
                   {m.warn && <div className="warn">{m.warn}</div>}
                   {m.content ? (
@@ -153,18 +165,18 @@ export default function ChatWindow({ options, messages, setMessages, form, setFo
                   ) : (
                     waiting &&
                     i === messages.length - 1 && (
-                      <div className="dots">
-                        <span />
-                        <span />
-                        <span />
-                      </div>
+                      <CarLoader label="Thinking…" />
                     )
                   )}
                   {m.recorded?.length > 0 && (
                     <div className="noted">
                       {m.recorded.map((r, j) => (
                         <span key={j} className="noted-chip">
-                          ✓ {FIELD_LABELS[r.field] || r.field}
+                          <svg viewBox="-10 -10 20 20" width="12" height="12" className="nut" aria-hidden="true">
+                            <polygon points="9,0 4.5,7.8 -4.5,7.8 -9,0 -4.5,-7.8 4.5,-7.8" />
+                            <circle r="3.5" />
+                          </svg>
+                          {FIELD_LABELS[r.field] || r.field}
                         </span>
                       ))}
                     </div>
@@ -176,7 +188,7 @@ export default function ChatWindow({ options, messages, setMessages, form, setFo
 
           {complete && !sending && (
             <div className="msg assistant">
-              <div className="avatar">M</div>
+              <div className="avatar"><Logo size={22} /></div>
               <div className="msg-body">
                 <SummaryCard variant="inline" options={options} form={form} complete busy={busy} onConfirm={onConfirm} onEdit={onEdit} />
               </div>

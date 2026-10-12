@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 
 const PROPS = [
   ["Su", "Tensile strength", "MPa"],
@@ -11,7 +12,7 @@ const PROPS = [
 
 const BASIS = { market: "Market", listing: "Listing", custom: "Your price", not_available: "No price" };
 
-export default function ResultCard({ r, onOverride }) {
+export default function ResultCard({ r, onOverride, onDatasheet, onCompare, compared, compareFull }) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [price, setPrice] = useState("");
@@ -25,14 +26,20 @@ export default function ResultCard({ r, onOverride }) {
   return (
     <article className={`card ${r.rank === 1 ? "best" : ""}`}>
       <div className="card-top">
-        <div className="rank">#{r.rank}</div>
+        <div className="rank mono">#{String(r.rank).padStart(2, "0")}</div>
         <div className="title">
-          <h3>{r.display_name}</h3>
+          <h3>
+            {r.display_name}
+            {r.rank === 1 && <span className="badge best inline">Best overall</span>}
+          </h3>
           <p className="muted">
             {r.material_group_label} · {r.standard}
           </p>
         </div>
-        {r.rank === 1 && <span className="badge best">Best overall</span>}
+        <label className={`cmp-check ${compared ? "on" : ""}`} title={compareFull && !compared ? "Up to 3" : "Add to comparison"}>
+          <input type="checkbox" checked={compared} disabled={compareFull && !compared} onChange={onCompare} />
+          Compare
+        </label>
       </div>
 
       <div className="metric">
@@ -41,10 +48,6 @@ export default function ResultCard({ r, onOverride }) {
           <div style={{ width: `${r.suitability_pct}%` }} />
         </div>
         <strong>{r.suitability_pct.toFixed(0)}%</strong>
-      </div>
-      <div className="metric small">
-        <span>TOPSIS score</span>
-        <strong>{r.topsis_score.toFixed(3)}</strong>
       </div>
 
       <div className="cost">
@@ -56,7 +59,7 @@ export default function ResultCard({ r, onOverride }) {
         <span className={`badge basis ${r.price.basis}`}>{BASIS[r.price.basis] || r.price.basis}</span>
       </div>
 
-      <div className="row wrap">
+      <div className="row wrap card-price">
         {!editing ? (
           <button className="link" onClick={() => setEditing(true)}>
             {r.price.custom ? "Change your price" : "Enter your price"}
@@ -75,13 +78,16 @@ export default function ResultCard({ r, onOverride }) {
             )}
           </div>
         )}
-        <button className="link" onClick={() => setOpen(!open)}>
-          {open ? "Hide details" : "Why this material?"}
+      </div>
+      <div className="card-actions">
+        <button className="link" onClick={() => setOpen(true)}>
+          Why this material?
         </button>
+        <button className="link" onClick={onDatasheet}>Datasheet</button>
       </div>
 
       {open && (
-        <div className="why">
+        <WhyModal r={r} onClose={() => setOpen(false)}>
           <h4>Model suitability per target class</h4>
           {Object.entries(r.class_suitability_pct).map(([c, p]) => (
             <div className="wbar" key={c}>
@@ -96,10 +102,6 @@ export default function ResultCard({ r, onOverride }) {
           <h4>Price</h4>
           <p>
             <strong>{r.price.text}</strong> — {r.price.why}
-          </p>
-          <p className="muted small">
-            Source: {r.price.url ? <a href={r.price.url} target="_blank" rel="noreferrer">{r.price.source}</a> : r.price.source}
-            {" · "}retrieved {r.price.date}
           </p>
 
           <h4>Properties (from the department dataset)</h4>
@@ -124,8 +126,36 @@ export default function ResultCard({ r, onOverride }) {
               </tr>
             </tbody>
           </table>
-        </div>
+        </WhyModal>
       )}
     </article>
+  );
+}
+
+// "Why this material?" details in a popup (Esc or click outside to close)
+function WhyModal({ r, onClose, children }) {
+  useEffect(() => {
+    const k = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [onClose]);
+  return createPortal(
+    <div className="modal-back" onClick={onClose}>
+      <div className="modal why-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="why-head">
+          <div>
+            <span className="muted small mono">#{String(r.rank).padStart(2, "0")} · WHY THIS MATERIAL</span>
+            <h3>
+            {r.display_name}
+            {r.rank === 1 && <span className="badge best inline">Best overall</span>}
+          </h3>
+            <p className="muted small">{r.material_group_label} · {r.standard}</p>
+          </div>
+          <button className="qclose" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <div className="why">{children}</div>
+      </div>
+    </div>,
+    document.body
   );
 }

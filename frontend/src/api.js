@@ -17,6 +17,7 @@ async function request(path, options = {}) {
 
 export const getOptions = () => request("/api/options");
 export const getPrices = () => request("/api/prices");
+export const getMaterialsSummary = () => request("/api/materials/summary");
 export const sendChat = (messages, form) =>
   request("/api/chat", { method: "POST", body: JSON.stringify({ messages, form }) });
 // Streaming chat: calls onEvent for each server event (token / recorded / done / error).
