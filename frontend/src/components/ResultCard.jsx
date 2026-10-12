@@ -67,9 +67,13 @@ export default function ResultCard({ r, onOverride, onDatasheet, onCompare, comp
         ) : (
           <div className="price-edit">
             <span>Rs/kg for {r.material_group_label}:</span>
-            <input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} autoFocus />
+            <input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") applyPrice(); if (e.key === "Escape") { setEditing(false); setPrice(""); } }} />
             <button className="primary small" onClick={applyPrice}>
               Apply
+            </button>
+            <button className="ghost small" onClick={() => { setEditing(false); setPrice(""); }}>
+              Cancel
             </button>
             {r.price.custom && (
               <button className="ghost small" onClick={() => { onOverride(r.material_group, null); setEditing(false); }}>
