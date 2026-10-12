@@ -21,6 +21,7 @@ chat_events() is a generator of events, used for streaming (SSE):
 from __future__ import annotations
 
 import json
+import re
 import os
 
 from backend.engine.options import FIELDS, MIN_LIMIT_FIELDS, property_options
@@ -185,6 +186,47 @@ Already recorded: {json.dumps(filled, ensure_ascii=False)}
 {ask}"""
 
 
+def _button_prompt(form: dict, answered: dict) -> str:
+    """After a question-card click the answer is already saved by code. The model only writes the
+    acknowledgement + the next question, so it gets no tool and no form-filling instructions."""
+    missing = missing_fields(form)
+    nxt = missing[0] if missing else None
+    ask = (f"Then ask ONE short question about {QUESTION_HINT[nxt]}. Ask about nothing else."
+           if nxt else "Then say that everything is noted and they can review the summary card and press Confirm.")
+    return f"""You are Matify's friendly requirements assistant for choosing a material for a mechanical part.
+The user just answered "{answered.get('label') or answered.get('value')}" for {QUESTION_HINT.get(answered.get('field'), 'the last question')}.
+That answer is saved.
+Write one or two short, warm sentences in plain text: briefly acknowledge it, {ask[0].lower() + ask[1:]}
+Rules: plain text only, no markdown, no lists, no internal codes, no function calls or code of any kind.
+Never name or suggest materials."""
+
+
+TOOL_TEXT = re.compile(r"\s*`?record_answer\s*\([^)]*\)`?\s*")
+
+
+class _ToolTextFilter:
+    """Removes tool calls the model sometimes writes as plain text, e.g. record_answer(field="x", ...),
+    while still streaming everything else token by token."""
+    KEY = "record_answer"
+
+    def __init__(self):
+        self.buf = ""
+
+    def feed(self, piece: str) -> str:
+        self.buf = TOOL_TEXT.sub(" ", self.buf + piece)
+        i = self.buf.find(self.KEY)
+        if i < 0:  # hold back a tail that could be the start of "record_answer"
+            i = next((j for j in range(max(0, len(self.buf) - len(self.KEY)), len(self.buf))
+                      if self.KEY.startswith(self.buf[j:].lstrip("`"))), len(self.buf))
+        out, self.buf = self.buf[:i], self.buf[i:]
+        return out
+
+    def flush(self) -> str:
+        out = TOOL_TEXT.sub(" ", self.buf)
+        self.buf = ""
+        return "" if self.KEY in out else out
+
+
 def _apply_tool_calls(tool_calls: list[dict], form: dict, group_keys: list[str], recorded: list, errors: list, msgs: list,
                       classes: list[str]):
     msgs.append({"role": "assistant", "content": "",
@@ -252,7 +294,10 @@ def chat_events(messages: list[dict], form: dict | None, price_categories: dict,
         client = _client()
         model = os.getenv("LLM_MODEL", MODEL)
         extra = {"extra_body": {"reasoning_effort": "low"}} if "gpt-oss" in model else {}
-        msgs = [{"role": "system", "content": _system_prompt(form, groups, classes, button)}] + history
+        if button:  # only the last few turns are needed to write the follow-up question
+            msgs = [{"role": "system", "content": _button_prompt(form, direct_answer)}] + history[-4:]
+        else:
+            msgs = [{"role": "system", "content": _system_prompt(form, groups, classes)}] + history
 
         for _ in range(MAX_TOOL_ROUNDS):
             tool_args = {} if button else {"tools": [RECORD_TOOL], "tool_choice": "auto"}
@@ -262,13 +307,16 @@ def chat_events(messages: list[dict], form: dict | None, price_categories: dict,
             )
             calls: dict[int, dict] = {}
             text = ""
+            clean = _ToolTextFilter()
             for chunk in stream:
                 if not chunk.choices:
                     continue
                 delta = chunk.choices[0].delta
                 if getattr(delta, "content", None):
-                    text += delta.content
-                    yield {"type": "token", "text": delta.content}
+                    out = clean.feed(delta.content)
+                    if out:
+                        text += out
+                        yield {"type": "token", "text": out}
                 for tc in getattr(delta, "tool_calls", None) or []:
                     c = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
                     if tc.id:
@@ -277,6 +325,10 @@ def chat_events(messages: list[dict], form: dict | None, price_categories: dict,
                         c["name"] += tc.function.name
                     if tc.function and tc.function.arguments:
                         c["arguments"] += tc.function.arguments
+            out = clean.flush()
+            if out:
+                text += out
+                yield {"type": "token", "text": out}
             reply += text
             button = False
             if not calls:

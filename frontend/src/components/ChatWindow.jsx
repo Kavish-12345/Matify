@@ -160,7 +160,7 @@ export default function ChatWindow({ options, messages, setMessages, form, setFo
                   {m.warn && <div className="warn">{m.warn}</div>}
                   {m.content ? (
                     <div className="md">
-                      <ReactMarkdown>{m.content}</ReactMarkdown>
+                      <ReactMarkdown>{m.role === "assistant" ? m.content.replace(/`?record_answer\s*\([^)]*\)`?/g, "").trim() : m.content}</ReactMarkdown>
                     </div>
                   ) : (
                     waiting &&
