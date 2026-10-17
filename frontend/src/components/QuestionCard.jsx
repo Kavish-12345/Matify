@@ -7,13 +7,21 @@ export default function QuestionCard({ spec, onAnswer, onClose }) {
   const [num, setNum] = useState("");
   const [limits, setLimits] = useState({});
   const [active, setActive] = useState(0);
+  const designDefaults = () => {
+    const v = {};
+    if (spec.type === "design") (spec.options || []).forEach((o) => "default" in o && (v[o.key] = String(o.default)));
+    return { ...v, ...(spec.type === "design" ? spec.preselected || {} : {}) };
+  };
+  const [design, setDesign] = useState(designDefaults);
 
   useEffect(() => {
-    setPicked(spec.preselected || []);
+    setPicked(spec.type === "design" ? [] : spec.preselected || []);
     setNum("");
     setLimits({});
     setActive(0);
-  }, [spec.field]);
+    setDesign(designDefaults());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spec.field, spec.function]);
 
   const opts = spec.options || [];
   const enabled = opts.filter((o) => !o.disabled);
@@ -54,11 +62,34 @@ export default function QuestionCard({ spec, onAnswer, onClose }) {
     onAnswer(value, text);
   }
 
+  function submitDesign() {
+    const value = {};
+    const text = [];
+    opts.forEach((o) => {
+      const v = design[o.key];
+      if (v === undefined || v === "") return;
+      value[o.key] = o.type === "select" ? v : Number(v);
+      text.push(o.type === "select" ? o.options.find((x) => x.value === v)?.label.split(" (")[0] : `${o.label} ${v}${o.unit ? " " + o.unit : ""}`);
+    });
+    onAnswer(value, text.join(", "));
+  }
+
+  const designOk = opts.every(
+    (o) => o.type === "select" || o.optional || (design[o.key] !== undefined && design[o.key] !== "" && Number(design[o.key]) > 0)
+  );
+
   const canContinue =
-    spec.type === "multi" ? picked.length > 0 : spec.type === "number" ? Number(num) > 0 : spec.type === "limits";
+    spec.type === "multi"
+      ? picked.length > 0
+      : spec.type === "number"
+      ? Number(num) > 0
+      : spec.type === "design"
+      ? designOk
+      : spec.type === "limits";
 
   function submit() {
-    if (spec.type === "multi") submitMulti();
+    if (spec.type === "design") submitDesign();
+    else if (spec.type === "multi") submitMulti();
     else if (spec.type === "number") submitNumber();
     else if (spec.type === "limits") submitLimits();
   }
@@ -154,6 +185,41 @@ export default function QuestionCard({ spec, onAnswer, onClose }) {
             </div>
             <small>{spec.hint}</small>
           </label>
+        </div>
+      )}
+
+      {spec.type === "design" && (
+        <div className="qinputs grid">
+          {opts.map((o, i) => (
+            <label className={`qfield ${o.type === "select" ? "wide" : ""}`} key={o.key}>
+              <span>
+                {o.label}
+                {o.optional && <em className="muted"> (optional)</em>}
+              </span>
+              {o.type === "select" ? (
+                <select value={design[o.key] ?? o.default} onChange={(e) => setDesign({ ...design, [o.key]: e.target.value })}>
+                  {o.options.map((x) => (
+                    <option key={x.value} value={x.value}>
+                      {x.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="qinput">
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={design[o.key] ?? ""}
+                    onChange={(e) => setDesign({ ...design, [o.key]: e.target.value })}
+                    placeholder={o.hint}
+                    autoFocus={i === 0}
+                  />
+                  <em>{o.unit}</em>
+                </div>
+              )}
+            </label>
+          ))}
         </div>
       )}
 
