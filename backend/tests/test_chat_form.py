@@ -31,7 +31,7 @@ def test_invalid_values_rejected():
 
 def test_complete_and_same_result_as_form():
     f = empty_form()
-    answers = {"part_name": "gear shaft", "properties": "Heat-treatable, Structural", "primary_property": "Heat-treatable",
+    answers = {"part_name": "gear shaft", "function": "not_sure", "properties": "Heat-treatable, Structural", "primary_property": "Heat-treatable",
                "environment": "dry_indoor", "weight_priority": "not_important",
                "cost_priority": "important", "volume_cm3": "none", "min_limits": "none",
                "include": "none", "avoid": "none"}

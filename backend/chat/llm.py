@@ -24,6 +24,7 @@ import json
 import re
 import os
 
+from backend.engine.design import COMMON_INPUTS, FUNCTIONS, function_options
 from backend.engine.options import FIELDS, MIN_LIMIT_FIELDS, property_options
 
 from .form_state import FIELD_ORDER, OPTIONAL, REQUIRED, apply_answer, missing_fields, normalise_form
@@ -37,6 +38,8 @@ FAMILY_LABELS = {"ferrous": "Steels and cast irons", "aluminium": "Aluminium all
 
 QUESTION_HINT = {
     "part_name": "what the part is",
+    "function": "what the part does mechanically, i.e. how it is loaded (pulled, bent, twisted, pressurised, a spring or a gear)",
+    "design_inputs": "the loads and main dimensions needed for the design calculation (they can fill them in the card below)",
     "properties": "which properties the part needs (they can tick suggestions in the card below)",
     "primary_property": "which of the chosen properties matters most",
     "environment": "where it works (indoors, outdoors, water, chemicals, heat)",
@@ -83,6 +86,8 @@ def group_labels(price_categories: dict) -> dict:
 
 QUESTION_TITLE = {
     "part_name": "What part are you designing?",
+    "function": "What does the part do? (how is it loaded)",
+    "design_inputs": "Loads and dimensions for the design calculation",
     "properties": "Which properties does the part need?",
     "primary_property": "Which one matters most?",
     "environment": "Where will it work?",
@@ -107,6 +112,16 @@ def question_spec(field: str | None, groups: dict, form: dict, classes: list[str
             "step": FIELD_ORDER.index(field) + 1, "total": len(FIELD_ORDER)}
     if field == "part_name":
         spec.update(type="text", options=[])
+    elif field == "function":
+        spec.update(type="single", options=[{k: o[k] for k in ("value", "label", "description", "examples")}
+                                            for o in function_options()],
+                    subtitle="Every part is designed as one of these machine elements")
+    elif field == "design_inputs":
+        fn = form.get("function")
+        f = FUNCTIONS.get(fn)
+        spec.update(type="design", function=fn, options=(f["inputs"] + COMMON_INPUTS) if f else [],
+                    preselected=form.get("design_draft") or {},
+                    subtitle=f"{f['load_mode']} · used to calculate the required strength" if f else "")
     elif field == "properties":
         # options = the classes the trained model predicts (not a hand-made list)
         spec.update(type="multi", options=property_options(classes or []),
@@ -134,6 +149,15 @@ def question_spec(field: str | None, groups: dict, form: dict, classes: list[str
 
 def _options_text(groups: dict, classes: list[str]) -> str:
     lines = []
+    fns = "; ".join(f"{k} = {f['label']} (e.g. {f['examples']})" for k, f in FUNCTIONS.items())
+    lines.append(f"- function (how the part is loaded): {fns}; or not_sure")
+    for k, f in FUNCTIONS.items():
+        keys = ", ".join(f"{i['key']}" + (f" [{'/'.join(o['value'] for o in i['options'])}]" if i.get("options")
+                                         else f" ({i['unit']})" if i.get("unit") else "")
+                         for i in f["inputs"] + COMMON_INPUTS)
+        lines.append(f"  design_inputs for {k}: {keys}")
+    lines.append("- design_inputs: 'key=value' pairs for the chosen function, e.g. 'P_kW=10, N_rpm=960, d_mm=30'. "
+                 "Partial values are kept. fos defaults to 2, loading to steady. 'not_sure' skips the calculation.")
     props = "; ".join(f"{o['value']} ({o['description']})" for o in property_options(classes))
     lines.append(f"- properties (one or more, use these exact class names): {props}")
     lines.append("- primary_property: one of the chosen properties (asked only if two or more are chosen)")
@@ -171,6 +195,13 @@ Recording rules:
 - Record only what the user clearly said. Never assume. If unclear, ask a short clarifying question.
 - "Not sure" / "don't know" -> value not_sure. Optional fields can be "none".
 - Map the user's words to the allowed values exactly (e.g. "Outdoors / humid" -> outdoor_humid).
+- Function: this follows "material selection in the design process". Map the part to the machine element that
+  describes how it is loaded (bolt -> tie, bracket/holder/lever -> beam, axle -> shaft, pipe/tank -> pressure_vessel,
+  coil spring -> spring, gear/pinion -> gear). If the part clearly matches, record function and say in a few words
+  how it is loaded (e.g. "A gear tooth bends at its root, so I'll design it as a spur gear."). If the part is vague
+  (e.g. "holder", "plate", "connector"), ask how the load acts on it before recording function.
+- Design inputs: record any numbers the user gives (power, speed, load, sizes) as design_inputs pairs with the
+  exact keys; convert units (50 kg -> F_N=490, 20 bar -> p_MPa=2). Never invent numbers.
 - Properties: after the user describes the part, call record_answer(field="suggested_properties") with the
   classes their description clearly points to (e.g. "bushing" -> Wear-resistant). These are ONLY suggestions,
   shown pre-ticked for the user to confirm. Record field "properties" yourself only if the user explicitly

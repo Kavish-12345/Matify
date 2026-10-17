@@ -38,6 +38,9 @@ app.add_middleware(  # React dev server (Vite) runs on port 5173
 
 class RecommendRequest(BaseModel):
     part_name: Optional[str] = Field(None, examples=["Gear shaft"])
+    function: str = Field("not_sure", examples=["shaft"])
+    design_inputs: Optional[dict[str, Any]] = Field(None, examples=[{"P_kW": 10, "N_rpm": 960, "M_Nm": 150,
+                                                                    "d_mm": 30, "fos": 2, "loading": "cyclic"}])
     properties: list[str] = Field(default_factory=lambda: ["not_sure"], examples=[["Heat-treatable", "Structural"]])
     primary_property: Optional[str] = Field(None, examples=["Heat-treatable"])
     environment: str = Field("not_sure", examples=["dry_indoor"])
@@ -110,6 +113,7 @@ def post_recommend(req: RecommendRequest):
     if not res["results"] and res.get("problem_fields"):
         # tell the UI which question to ask again (the chat re-asks it)
         form = normalise_form(req.model_dump())
+        form["design_draft"] = dict(req.design_inputs or {})  # prefill the card with the previous values
         for f in res["problem_fields"]:
             form[f] = None
         eng = load_engine()

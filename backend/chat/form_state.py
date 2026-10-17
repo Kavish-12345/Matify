@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import re
 
+from backend.engine.design import COMMON_INPUTS, FUNCTIONS, clean_inputs
 from backend.engine.options import FAMILIES, FIELDS, MIN_LIMIT_FIELDS
 
-REQUIRED = ["part_name", "properties", "primary_property", "environment",
+# function + design_inputs = Ashby "translation" (what the part does, its loads and sizes)
+REQUIRED = ["part_name", "function", "design_inputs", "properties", "primary_property", "environment",
             "weight_priority", "cost_priority"]
 OPTIONAL = ["volume_cm3", "min_limits", "include", "avoid"]
 FIELD_ORDER = REQUIRED + OPTIONAL
@@ -28,6 +30,7 @@ def empty_form() -> dict:
     form = {f: None for f in FIELD_ORDER}
     form["user_words"] = {}
     form["suggested"] = []   # AI suggestions for 'properties' (shown pre-ticked; never counted until confirmed)
+    form["design_draft"] = {}  # design inputs given so far (prefills the card until all are known)
     return form
 
 
@@ -39,7 +42,32 @@ def normalise_form(form: dict | None) -> dict:
                 base[k] = form[k]
         base["user_words"] = dict(form.get("user_words") or {})
         base["suggested"] = list(form.get("suggested") or [])
+        base["design_draft"] = dict(form.get("design_draft") or {})
     return base
+
+
+def _match_function(text: str) -> str | None:
+    t = text.strip().lower().replace(" ", "_")
+    if t in FUNCTIONS:
+        return t
+    for k, f in FUNCTIONS.items():
+        if text.strip().lower() == f["label"].lower() or text.strip().lower() == f["label"].split(" (")[0].lower():
+            return k
+    return None
+
+
+def _parse_design(raw) -> dict:
+    """'P_kW=10, N_rpm=960, loading=cyclic' or a dict -> dict."""
+    if isinstance(raw, dict):
+        return dict(raw)
+    text = str(raw)
+    if text.strip().startswith("{"):
+        import json
+        try:
+            return dict(json.loads(text))
+        except ValueError:
+            pass
+    return {k: v for k, v in re.findall(r"([A-Za-z_]+)\s*[=:]\s*([A-Za-z_]+|\d+(?:\.\d+)?)", text)}
 
 
 def missing_fields(form: dict) -> list[str]:
@@ -82,6 +110,38 @@ def apply_answer(form: dict, field: str, value, user_words: str, groups: list[st
         if not text.strip():
             return "part_name must not be empty"
         form[field] = text.strip()[:80]
+
+    elif field == "function":
+        if _is_none_word(text):
+            form["function"], form["design_inputs"] = "not_sure", "not_sure"
+        else:
+            fn = _match_function(text)
+            if not fn:
+                return f"Unknown function '{text}'. Allowed: {', '.join(FUNCTIONS)} or not_sure"
+            if form.get("function") != fn:
+                form["design_inputs"], form["design_draft"] = None, {}
+            form["function"] = fn
+            if not form.get("suggested"):  # pre-tick the classes this function implies
+                form["suggested"] = [c for c in FUNCTIONS[fn]["classes"] if c in classes]
+
+    elif field == "design_inputs":
+        fn = form.get("function")
+        if fn in (None, "not_sure"):
+            if _is_none_word(text) or fn == "not_sure":
+                form[field] = "not_sure"
+                return None
+            return "Record the part's function first"
+        if not isinstance(raw, dict) and _is_none_word(text):
+            form[field] = "not_sure"
+        else:
+            keys = {i["key"] for i in FUNCTIONS[fn]["inputs"] + COMMON_INPUTS}
+            draft = {**form.get("design_draft", {}),
+                     **{k: v for k, v in _parse_design(raw).items() if k in keys and v not in (None, "")}}
+            form["design_draft"] = draft
+            try:
+                form[field] = clean_inputs(fn, draft)
+            except ValueError as e:
+                return f"{e}. Saved so far: {draft}. Ask the user for the missing value(s)."
 
     elif field == "properties":
         vals = _split(raw)
@@ -188,6 +248,8 @@ def to_recommend_payload(form: dict, price_overrides: dict | None = None, top_n:
     vol = form.get("volume_cm3")
     return {
         "part_name": form.get("part_name"),
+        "function": form.get("function") or "not_sure",
+        "design_inputs": form.get("design_inputs") if isinstance(form.get("design_inputs"), dict) else None,
         "properties": form.get("properties") or ["not_sure"],
         "primary_property": form.get("primary_property") if form.get("primary_property") != "not_sure" else None,
         "environment": form.get("environment") or "not_sure",
